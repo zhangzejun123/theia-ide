@@ -205,20 +205,8 @@ jobs:
             sleep $RETRY_INTERVAL
           done
 
-          # 解压 build-cache-linux
-          7z x build-cache-linux.7z
-
-          # 将 linux 原生模块合并到 build-cache-all/node_modules/linux
-          mkdir -p build-cache-all/node_modules/linux
-          cp -r build-cache-linux/linux/. build-cache-all/node_modules/linux/
-
-          # 将 Linux electron-gyp 合并到 build-cache-all/electron-gyp/linux
-          if [ -d "build-cache-linux/electron-gyp/linux" ]; then
-            mkdir -p build-cache-all/electron-gyp/linux
-            cp -r build-cache-linux/electron-gyp/linux/. build-cache-all/electron-gyp/linux/
-          fi
-
-          # 将 Linux @theia 放入 build-cache-all
+          # 将 Linux 产物直接放入 build-cache-all，后续自行解压
+          cp build-cache-linux.7z build-cache-all/
           cp "@theia-Linux-node${{ matrix.node }}.7z" build-cache-all/
 
       - name: Compress artifacts (Windows)
