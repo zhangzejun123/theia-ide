@@ -115,10 +115,16 @@ jobs:
         shell: bash
         run: |
           OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
-          READY_DIR="build-cache-${OS_NAME}"
+
+          # Windows 使用 build-cache-all，Linux 使用 build-cache-linux
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            READY_DIR="build-cache-all"
+          else
+            READY_DIR="build-cache-${OS_NAME}"
+          fi
           mkdir -p "${READY_DIR}"
 
-          # yarn.lock
+          # yarn.lock（仅 Windows）
           if [ "${{ runner.os }}" == "Windows" ]; then
             cp yarn.lock "${READY_DIR}/yarn.lock"
           fi
@@ -142,12 +148,12 @@ jobs:
             cp -r node_modules/ssh2                 "${READY_DIR}/linux/ssh2"
           fi
 
-          # ~/.electron-gyp/{electron_version}
+          # ~/.electron-gyp/{electron_version} -> electron-gyp/<os>/
           ELECTRON_VERSION=$(node -p "require('./applications/electron/package.json').devDependencies.electron")
           ELECTRON_GYP_DIR="${HOME}/.electron-gyp/${ELECTRON_VERSION}"
           if [ -d "${ELECTRON_GYP_DIR}" ]; then
-            mkdir -p "${READY_DIR}/electron-gyp"
-            cp -r "${ELECTRON_GYP_DIR}" "${READY_DIR}/electron-gyp/${ELECTRON_VERSION}"
+            mkdir -p "${READY_DIR}/electron-gyp/${OS_NAME}"
+            cp -r "${ELECTRON_GYP_DIR}" "${READY_DIR}/electron-gyp/${OS_NAME}/${ELECTRON_VERSION}"
           fi
 
           # plugins（重命名为 <plugin>-<version>，仅 Windows）
@@ -155,31 +161,85 @@ jobs:
             node scripts/prepare-plugins.js "${READY_DIR}/plugins"
           fi
 
-      - name: Compress artifacts
-        if: github.event_name != 'pull_request'
+      - name: Upload build-cache-linux as artifact (Linux)
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         shell: bash
-        run: |
-          OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
-          (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-${{ runner.os }}-node${{ matrix.node }}.7z" .)
-          7z a -t7z -mx=9 "build-cache-${OS_NAME}.7z" "build-cache-${OS_NAME}/"
+        run: 7z a -t7z -mx=9 build-cache-linux.7z build-cache-linux/
 
-      - name: Publish to release
-        if: github.event_name != 'pull_request'
+      - name: Upload @theia as artifact (Linux)
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        shell: bash
+        run: (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Linux-node${{ matrix.node }}.7z" .)
+
+      - name: Upload Linux artifacts
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-cache-linux
+          path: |
+            build-cache-linux.7z
+            @theia-Linux-node${{ matrix.node }}.7z
+          retention-days: 1
+          compression-level: 0
+
+      - name: Download and merge Linux build-cache (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          # 等待 Linux artifact 上传完成（最多等 MAX_RETRIES * RETRY_INTERVAL秒，每 30 秒重试一次）
+          MAX_RETRIES=100
+          RETRY_INTERVAL=30
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES: downloading build-cache-linux..."
+            if gh run download ${{ github.run_id }} --name build-cache-linux --dir .; then
+              echo "Download succeeded."
+              break
+            fi
+            if [ $i -eq $MAX_RETRIES ]; then
+              echo "Timed out waiting for build-cache-linux artifact."
+              exit 1
+            fi
+            echo "Not ready yet, retrying in ${RETRY_INTERVAL}s..."
+            sleep $RETRY_INTERVAL
+          done
+
+          # 解压 build-cache-linux
+          7z x build-cache-linux.7z
+
+          # 将 linux 原生模块合并到 build-cache-all/node_modules/linux
+          mkdir -p build-cache-all/node_modules/linux
+          cp -r build-cache-linux/linux/. build-cache-all/node_modules/linux/
+
+          # 将 Linux electron-gyp 合并到 build-cache-all/electron-gyp/linux
+          if [ -d "build-cache-linux/electron-gyp/linux" ]; then
+            mkdir -p build-cache-all/electron-gyp/linux
+            cp -r build-cache-linux/electron-gyp/linux/. build-cache-all/electron-gyp/linux/
+          fi
+
+          # 将 Linux @theia 放入 build-cache-all
+          cp "@theia-Linux-node${{ matrix.node }}.7z" build-cache-all/
+
+      - name: Compress artifacts (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Windows-node${{ matrix.node }}.7z" .)
+          cp "@theia-Windows-node${{ matrix.node }}.7z" build-cache-all/
+          7z a -t7z -mx=9 "build-cache-all.7z" "build-cache-all/"
+
+      - name: Publish to release (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
-          TAG="build-cache-${OS_NAME}-${BRANCH_NAME}"
-
-          # 删除旧的 release 和 tag（忽略不存在的错误）
-          gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
-
-          # 重新创建 release 并上传产物
-          gh release create "${TAG}" \
-            --title "Build Cache: ${BRANCH_NAME} (${OS_NAME})" \
-            --notes "Auto-generated build cache for branch \`${BRANCH_NAME}\` on ${OS_NAME}." \
+          ALL_TAG="build-cache-all-${BRANCH_NAME}"
+          gh release delete "${ALL_TAG}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "${ALL_TAG}" \
+            --title "Build Cache All: ${BRANCH_NAME}" \
+            --notes "Auto-generated combined build cache for branch \`${BRANCH_NAME}\`." \
             --prerelease \
-            "@theia-${{ runner.os }}-node${{ matrix.node }}.7z" \
-            "build-cache-${OS_NAME}.7z"
+            "build-cache-all.7z"
