@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - 'feature-**'
     paths-ignore:
       - '**/*.md'
       - 'TheiaIDE logo/**'
@@ -14,8 +15,6 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'TheiaIDE logo/**'
-  schedule:
-    - cron: "0 4 * * *" # Runs every day at 4am: https://docs.github.com/en/actions/reference/events-that-trigger-workflows#scheduled-events-schedule
 
 jobs:
   build:
@@ -24,17 +23,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-22.04, macos-15, macos-15-intel] # macos-15-intel is for x64, macOS-15 is for arm64
-        node: ["24.x"]
+        os: [windows-2022, ubuntu-22.04]
+        node: ["22.x"]
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0 # To fetch all history for all branches and tags. (Will be required for caching with lerna: https://github.com/markuplint/markuplint/pull/111)
+          fetch-depth: 0
 
       - name: Use Node.js ${{ matrix.node }}
         uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
@@ -47,26 +48,39 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Download @theia packages from theia fork
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          github_token: ${{ secrets.THEIA_REPO_TOKEN }}
+          repo: zhangzejun123/theia
+          workflow: ci-cd.yml
+          branch: feature-axio-one-1700
+          name: "@theia-${{ runner.os }}-node${{ matrix.node }}"
+          path: .theia-local-packages/
+          workflow_conclusion: ""
+
       - name: Install dependencies
         shell: bash
         run: yarn --skip-integrity-check --network-timeout 100000
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Override node_modules/@theia with local packages
+        shell: bash
+        run: node scripts/use-local-theia.js .theia-local-packages/
+
+      - name: Fix permissions for @theia binaries (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          find node_modules/@theia -name "*.js" -path "*/bin/*" -exec chmod +x {} \;
+          find node_modules/.bin -lname "../@theia/*" -exec chmod +x {} \;
+
       - name: Lint
         shell: bash
         run: yarn lint
 
-      - name: Build dev package (Windows, Linux)
-        if: (runner.os == 'Windows' || runner.os == 'Linux') && github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          yarn build:dev
-          yarn download:plugins
-          yarn package:applications:preview
-        env:
-          NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+
 
       - name: Build prod package (Windows, Linux)
         if: (runner.os == 'Windows' || runner.os == 'Linux') && github.event_name != 'pull_request'
@@ -76,76 +90,96 @@ jobs:
           yarn download:plugins
           yarn package:applications
         env:
-          NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+          NODE_OPTIONS: --max_old_space_size=12288
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update electron-builder.yml for macos-15
-        if: matrix.os == 'macos-15'
-        run: |
-          sed -i '' 's|https://download.eclipse.org/theia/ide/latest/macos|https://download.eclipse.org/theia/ide/latest/macos-arm|g' applications/electron/electron-builder.yml
-
-      - name: Build prod package (Mac)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          yarn build
-          yarn download:plugins
-          yarn package:applications
-        env:
-          NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
-
-      - name: Upload Mac Dist Files
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: ${{ matrix.os == 'macos-15-intel' && 'mac-x64' || matrix.os == 'macos-15' && 'mac-arm64'}}
-          path: |
-            applications/electron/dist/**
-            !applications/electron/dist/mac/**
-            !applications/electron/dist/mac-arm64/**
-          retention-days: 1
-
-      - name: Upload Windows Dist Files
+      - name: Replace electron.exe icon (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: windows
-          path: |
-            applications/electron/dist/**
-          retention-days: 1
-
-      - name: Upload Linux Dist Files
-        if: runner.os == 'Linux' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: linux
-          path: |
-            applications/electron/dist/**
-          retention-days: 1
-
-      - name: Test (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          xvfb-run -a yarn electron test
-
-      - name: Test (Windows)
-        if: runner.os == 'Windows'
         shell: bash
         run: |
-          yarn electron test
+          curl -L https://github.com/electron/rcedit/releases/latest/download/rcedit-x64.exe -o rcedit.exe
+          ./rcedit.exe "node_modules/electron/dist/electron.exe" --set-icon "resources/icons/AxioOne.ico"
 
-      - name: Test (macOS)
-        if: runner.os == 'macOS'
+      - name: Apply custom patches
+        shell: bash
+        run: npx patch-package --patch-dir ./custom-patchs
+
+      - name: Copy fontawesome-pro to node_modules
         shell: bash
         run: |
-          yarn electron test
+          7z x resources/fontawesome-pro.7z -oresources/fontawesome-pro
+          cp -r resources/fontawesome-pro node_modules/@fontawesome
 
-      - name: Upload test screenshots
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: test-screenshots-${{ matrix.os }}
-          path: applications/electron/test-screenshots/
-          if-no-files-found: ignore
-          retention-days: 5
+      - name: Prepare build-cache directory
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          READY_DIR="build-cache-${OS_NAME}"
+          mkdir -p "${READY_DIR}"
+
+          # yarn.lock
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            cp yarn.lock "${READY_DIR}/yarn.lock"
+          fi
+
+          # node_modules/@theia 不放入 build-cache 目录，单独上传
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            # Windows: node_modules 完整（不含 @theia）
+            cp -r node_modules "${READY_DIR}/node_modules"
+            rm -rf "${READY_DIR}/node_modules/@theia"
+          else
+            # Linux: 只拷贝指定的原生模块，保留父级目录结构
+            mkdir -p "${READY_DIR}/linux/@theia"
+            mkdir -p "${READY_DIR}/linux/@vscode"
+
+            cp -r node_modules/@parcel              "${READY_DIR}/linux/@parcel"
+            cp -r node_modules/@theia/ffmpeg        "${READY_DIR}/linux/@theia/ffmpeg"
+            cp -r node_modules/@vscode/ripgrep      "${READY_DIR}/linux/@vscode/ripgrep"
+            cp -r node_modules/drivelist            "${READY_DIR}/linux/drivelist"
+            cp -r node_modules/electron             "${READY_DIR}/linux/electron"
+            cp -r node_modules/node-pty             "${READY_DIR}/linux/node-pty"
+            cp -r node_modules/ssh2                 "${READY_DIR}/linux/ssh2"
+          fi
+
+          # ~/.electron-gyp/{electron_version}
+          ELECTRON_VERSION=$(node -p "require('./applications/electron/package.json').devDependencies.electron")
+          ELECTRON_GYP_DIR="${HOME}/.electron-gyp/${ELECTRON_VERSION}"
+          if [ -d "${ELECTRON_GYP_DIR}" ]; then
+            mkdir -p "${READY_DIR}/electron-gyp"
+            cp -r "${ELECTRON_GYP_DIR}" "${READY_DIR}/electron-gyp/${ELECTRON_VERSION}"
+          fi
+
+          # plugins（重命名为 <plugin>-<version>，仅 Windows）
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            node scripts/prepare-plugins.js "${READY_DIR}/plugins"
+          fi
+
+      - name: Compress artifacts
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-${{ runner.os }}-node${{ matrix.node }}.7z" .)
+          7z a -t7z -mx=9 "build-cache-${OS_NAME}.7z" "build-cache-${OS_NAME}/"
+
+      - name: Publish to release
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          TAG="build-cache-${OS_NAME}-${BRANCH_NAME}"
+
+          # 删除旧的 release 和 tag（忽略不存在的错误）
+          gh release delete "${TAG}" --yes --cleanup-tag 2>/dev/null || true
+
+          # 重新创建 release 并上传产物
+          gh release create "${TAG}" \
+            --title "Build Cache: ${BRANCH_NAME} (${OS_NAME})" \
+            --notes "Auto-generated build cache for branch \`${BRANCH_NAME}\` on ${OS_NAME}." \
+            --prerelease \
+            "@theia-${{ runner.os }}-node${{ matrix.node }}.7z" \
+            "build-cache-${OS_NAME}.7z"
