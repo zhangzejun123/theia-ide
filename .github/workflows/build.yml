@@ -135,24 +135,33 @@ jobs:
             rm -rf "${READY_DIR}/node_modules/@theia"
           else
             # Linux: 只拷贝指定的原生模块，保留父级目录结构
-            mkdir -p "${READY_DIR}/linux/@theia"
-            mkdir -p "${READY_DIR}/linux/@vscode"
+            LINUX_STAGING="${READY_DIR}/_linux_staging"
+            mkdir -p "${LINUX_STAGING}/@theia"
+            mkdir -p "${LINUX_STAGING}/@vscode"
 
-            cp -r node_modules/@parcel              "${READY_DIR}/linux/@parcel"
-            cp -r node_modules/@theia/ffmpeg        "${READY_DIR}/linux/@theia/ffmpeg"
-            cp -r node_modules/@vscode/ripgrep      "${READY_DIR}/linux/@vscode/ripgrep"
-            cp -r node_modules/drivelist            "${READY_DIR}/linux/drivelist"
-            cp -r node_modules/electron             "${READY_DIR}/linux/electron"
-            cp -r node_modules/node-pty             "${READY_DIR}/linux/node-pty"
-            cp -r node_modules/ssh2                 "${READY_DIR}/linux/ssh2"
+            cp -r node_modules/@parcel              "${LINUX_STAGING}/@parcel"
+            cp -r node_modules/@theia/ffmpeg        "${LINUX_STAGING}/@theia/ffmpeg"
+            cp -r node_modules/@vscode/ripgrep      "${LINUX_STAGING}/@vscode/ripgrep"
+            cp -r node_modules/drivelist            "${LINUX_STAGING}/drivelist"
+            cp -r node_modules/electron             "${LINUX_STAGING}/electron"
+            cp -r node_modules/node-pty             "${LINUX_STAGING}/node-pty"
+            cp -r node_modules/ssh2                 "${LINUX_STAGING}/ssh2"
+
+            # 压缩为 linux.tar.gz，保留符号链接和权限
+            tar -czf "${READY_DIR}/linux.tar.gz" -C "${LINUX_STAGING}" .
+            rm -rf "${LINUX_STAGING}"
           fi
 
-          # ~/.electron-gyp/{electron_version} -> electron-gyp/<os>/
+          # ~/.electron-gyp/{electron_version} -> electron-gyp/<os>/<version>.7z (Windows) or .tar.gz (Linux)
           ELECTRON_VERSION=$(node -p "require('./applications/electron/package.json').devDependencies.electron")
           ELECTRON_GYP_DIR="${HOME}/.electron-gyp/${ELECTRON_VERSION}"
           if [ -d "${ELECTRON_GYP_DIR}" ]; then
             mkdir -p "${READY_DIR}/electron-gyp/${OS_NAME}"
-            cp -r "${ELECTRON_GYP_DIR}" "${READY_DIR}/electron-gyp/${OS_NAME}/${ELECTRON_VERSION}"
+            if [ "${{ runner.os }}" == "Windows" ]; then
+              7z a -t7z -mx=9 "${READY_DIR}/electron-gyp/${ELECTRON_VERSION}.7z" "${ELECTRON_GYP_DIR}/."
+            else
+              tar -czf "${READY_DIR}/electron-gyp/${OS_NAME}/${ELECTRON_VERSION}.tar.gz" -C "${ELECTRON_GYP_DIR}" .
+            fi
           fi
 
           # plugins（重命名为 <plugin>-<version>，仅 Windows）
@@ -163,23 +172,29 @@ jobs:
       - name: Upload build-cache-linux as artifact (Linux)
         if: runner.os == 'Linux' && github.event_name != 'pull_request'
         shell: bash
-        run: 7z a -t7z -mx=9 build-cache-linux.7z build-cache-linux/
+        run: 7z a -t7z -mx=9 build-cache-linux.7z build-cache-linux/linux.tar.gz "build-cache-linux/electron-gyp/"
 
       - name: Upload @theia as artifact (Linux)
         if: runner.os == 'Linux' && github.event_name != 'pull_request'
         shell: bash
         run: (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Linux-node${{ matrix.node }}.7z" .)
 
-      - name: Upload Linux artifacts
+      - name: Publish Linux artifacts to release
         if: runner.os == 'Linux' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-cache-linux
-          path: |
-            build-cache-linux.7z
-            @theia-Linux-node${{ matrix.node }}.7z
-          retention-days: 1
-          compression-level: 0
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          RELEASE_TAG="build-cache-${BRANCH_NAME}"
+          gh release create "${RELEASE_TAG}" \
+            --title "Build Cache: ${BRANCH_NAME}" \
+            --notes "Auto-generated build cache for branch \`${BRANCH_NAME}\`." \
+            --prerelease 2>/dev/null || true
+          gh release upload "${RELEASE_TAG}" \
+            "build-cache-linux.7z" \
+            "@theia-Linux-node${{ matrix.node }}.7z" \
+            --clobber
 
       - name: Download and merge Linux build-cache (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
@@ -187,25 +202,33 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 等待 Linux artifact 上传完成（最多等 MAX_RETRIES * RETRY_INTERVAL秒，每 30 秒重试一次）
+          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          RELEASE_TAG="build-cache-${BRANCH_NAME}"
+          # 等待 Linux 上传 release 完成（最多等 MAX_RETRIES * RETRY_INTERVAL 秒，每 30 秒重试一次）
           MAX_RETRIES=100
           RETRY_INTERVAL=30
           for i in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt $i/$MAX_RETRIES: downloading build-cache-linux..."
-            if gh run download ${{ github.run_id }} --name build-cache-linux --dir .; then
+            echo "Attempt $i/$MAX_RETRIES: downloading from release ${RELEASE_TAG}..."
+            if gh release download "${RELEASE_TAG}" \
+                --pattern "build-cache-linux.7z" \
+                --pattern "@theia-Linux-node${{ matrix.node }}.7z" \
+                --dir . --clobber; then
               echo "Download succeeded."
               break
             fi
             if [ $i -eq $MAX_RETRIES ]; then
-              echo "Timed out waiting for build-cache-linux artifact."
+              echo "Timed out waiting for Linux release assets."
               exit 1
             fi
             echo "Not ready yet, retrying in ${RETRY_INTERVAL}s..."
             sleep $RETRY_INTERVAL
           done
 
-          # 将 Linux 产物直接放入 build-cache-all，后续自行解压
-          cp build-cache-linux.7z build-cache-all/
+          # 从 build-cache-linux.7z 中提取 linux.tar.gz 和 electron-gyp tar.gz，放入 build-cache-all/
+          ELECTRON_VERSION=$(node -p "require('./applications/electron/package.json').devDependencies.electron")
+          7z e build-cache-linux.7z "build-cache-linux/linux.tar.gz" -o"build-cache-all/" -r
+          mkdir -p "build-cache-all/electron-gyp"
+          7z e build-cache-linux.7z "build-cache-linux/electron-gyp/linux/${ELECTRON_VERSION}.tar.gz" -o"build-cache-all/electron-gyp/" -r
           cp "@theia-Linux-node${{ matrix.node }}.7z" build-cache-all/
 
       - name: Compress artifacts (Windows)
@@ -214,6 +237,7 @@ jobs:
         run: |
           (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Windows-node${{ matrix.node }}.7z" .)
           cp "@theia-Windows-node${{ matrix.node }}.7z" build-cache-all/
+          cp resources/migrate_node_modules.py build-cache-all/
           7z a -t7z -mx=9 "build-cache-all.7z" "build-cache-all/"
 
       - name: Publish to release (Windows)
@@ -223,10 +247,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
-          ALL_TAG="build-cache-all-${BRANCH_NAME}"
-          gh release delete "${ALL_TAG}" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "${ALL_TAG}" \
-            --title "Build Cache All: ${BRANCH_NAME}" \
+          RELEASE_TAG="build-cache-${BRANCH_NAME}"
+          gh release delete "${RELEASE_TAG}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "${RELEASE_TAG}" \
+            --title "Build Cache: ${BRANCH_NAME}" \
             --notes "Auto-generated combined build cache for branch \`${BRANCH_NAME}\`." \
             --prerelease \
             "build-cache-all.7z"
