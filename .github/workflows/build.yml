@@ -130,17 +130,15 @@ jobs:
 
           # node_modules/@theia 不放入 build-cache 目录，单独上传
           if [ "${{ runner.os }}" == "Windows" ]; then
-            # Windows: node_modules 完整（不含 @theia）
+            # Windows: node_modules 完整（含 @theia，不含单独处理的部分）
             cp -r node_modules "${READY_DIR}/node_modules"
-            rm -rf "${READY_DIR}/node_modules/@theia"
           else
-            # Linux: 只拷贝指定的原生模块，保留父级目录结构
+            # Linux: 只拷贝指定的原生模块 + 整个 @theia
             LINUX_STAGING="${READY_DIR}/_linux_staging"
-            mkdir -p "${LINUX_STAGING}/@theia"
             mkdir -p "${LINUX_STAGING}/@vscode"
 
             cp -r node_modules/@parcel              "${LINUX_STAGING}/@parcel"
-            cp -r node_modules/@theia/ffmpeg        "${LINUX_STAGING}/@theia/ffmpeg"
+            cp -r node_modules/@theia               "${LINUX_STAGING}/@theia"
             cp -r node_modules/@vscode/ripgrep      "${LINUX_STAGING}/@vscode/ripgrep"
             cp -r node_modules/drivelist            "${LINUX_STAGING}/drivelist"
             cp -r node_modules/electron             "${LINUX_STAGING}/electron"
@@ -174,11 +172,6 @@ jobs:
         shell: bash
         run: 7z a -t7z -mx=9 build-cache-linux.7z build-cache-linux/linux.tar.gz "build-cache-linux/electron-gyp/"
 
-      - name: Upload @theia as artifact (Linux)
-        if: runner.os == 'Linux' && github.event_name != 'pull_request'
-        shell: bash
-        run: (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Linux-node${{ matrix.node }}.7z" .)
-
       - name: Publish Linux artifacts to release
         if: runner.os == 'Linux' && github.event_name != 'pull_request'
         shell: bash
@@ -193,23 +186,7 @@ jobs:
             --prerelease 2>/dev/null || true
           gh release upload "${RELEASE_TAG}" \
             "build-cache-linux.7z" \
-            "@theia-Linux-node${{ matrix.node }}.7z" \
             --clobber
-
-      - name: Publish @theia-Windows to release
-        if: runner.os == 'Windows' && github.event_name != 'pull_request'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Windows-node${{ matrix.node }}.7z" . && cd ../..
-          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
-          RELEASE_TAG="build-cache-${BRANCH_NAME}"
-          gh release create "${RELEASE_TAG}" \
-            --title "Build Cache: ${BRANCH_NAME}" \
-            --notes "Auto-generated build cache for branch \`${BRANCH_NAME}\`." \
-            --prerelease 2>/dev/null || true
-          gh release upload "${RELEASE_TAG}" "@theia-Windows-node${{ matrix.node }}.7z" --clobber
 
       - name: Download and merge Linux build-cache (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
@@ -226,7 +203,6 @@ jobs:
             echo "Attempt $i/$MAX_RETRIES: downloading from release ${RELEASE_TAG}..."
             if gh release download "${RELEASE_TAG}" \
                 --pattern "build-cache-linux.7z" \
-                --pattern "@theia-Linux-node${{ matrix.node }}.7z" \
                 --dir . --clobber; then
               echo "Download succeeded."
               break
@@ -239,19 +215,19 @@ jobs:
             sleep $RETRY_INTERVAL
           done
 
-          # 从 build-cache-linux.7z 中提取 linux.tar.gz 和 electron-gyp tar.gz，放入 build-cache-all/
+          # 从 build-cache-linux.7z 中提取 linux.tar.gz（含 @theia）和 electron-gyp tar.gz，放入 build-cache-all/
           ELECTRON_VERSION=$(node -p "require('./applications/electron/package.json').devDependencies.electron")
           7z e build-cache-linux.7z "build-cache-linux/linux.tar.gz" -o"build-cache-all/" -r
           mkdir -p "build-cache-all/electron-gyp"
           7z e build-cache-linux.7z "build-cache-linux/electron-gyp/linux/${ELECTRON_VERSION}.tar.gz" -o"build-cache-all/electron-gyp/" -r
-          cp "@theia-Linux-node${{ matrix.node }}.7z" build-cache-all/
+
+          # 将 linux.tar.gz 放到 node_modules/ 供后续使用
+          cp build-cache-all/linux.tar.gz node_modules/linux.tar.gz
 
       - name: Compress artifacts (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
         run: |
-          cp "@theia-Windows-node${{ matrix.node }}.7z" build-cache-all/
-          cp "@theia-Linux-node${{ matrix.node }}.7z" build-cache-all/
           cp resources/migrate_node_modules.py build-cache-all/
           7z a -t7z -mx=9 "build-cache-all.7z" "build-cache-all/"
 
