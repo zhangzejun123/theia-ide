@@ -196,6 +196,21 @@ jobs:
             "@theia-Linux-node${{ matrix.node }}.7z" \
             --clobber
 
+      - name: Publish @theia-Windows to release
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Windows-node${{ matrix.node }}.7z" . && cd ../..
+          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          RELEASE_TAG="build-cache-${BRANCH_NAME}"
+          gh release create "${RELEASE_TAG}" \
+            --title "Build Cache: ${BRANCH_NAME}" \
+            --notes "Auto-generated build cache for branch \`${BRANCH_NAME}\`." \
+            --prerelease 2>/dev/null || true
+          gh release upload "${RELEASE_TAG}" "@theia-Windows-node${{ matrix.node }}.7z" --clobber
+
       - name: Download and merge Linux build-cache (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
@@ -235,8 +250,8 @@ jobs:
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
         run: |
-          (cd node_modules/@theia && 7z a -t7z -mx=9 "../../@theia-Windows-node${{ matrix.node }}.7z" .)
           cp "@theia-Windows-node${{ matrix.node }}.7z" build-cache-all/
+          cp "@theia-Linux-node${{ matrix.node }}.7z" build-cache-all/
           cp resources/migrate_node_modules.py build-cache-all/
           7z a -t7z -mx=9 "build-cache-all.7z" "build-cache-all/"
 
@@ -248,9 +263,4 @@ jobs:
         run: |
           BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
           RELEASE_TAG="build-cache-${BRANCH_NAME}"
-          gh release delete "${RELEASE_TAG}" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "${RELEASE_TAG}" \
-            --title "Build Cache: ${BRANCH_NAME}" \
-            --notes "Auto-generated combined build cache for branch \`${BRANCH_NAME}\`." \
-            --prerelease \
-            "build-cache-all.7z"
+          gh release upload "${RELEASE_TAG}" "build-cache-all.7z" --clobber
