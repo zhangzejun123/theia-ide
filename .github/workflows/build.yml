@@ -54,7 +54,7 @@ jobs:
           github_token: ${{ secrets.THEIA_REPO_TOKEN }}
           repo: zhangzejun123/theia
           workflow: ci-cd.yml
-          branch: feature-axio-one-1700
+          branch: ${{ github.ref_name }}
           name: "@theia-${{ runner.os }}-node${{ matrix.node }}"
           path: .theia-local-packages/
           workflow_conclusion: ""
