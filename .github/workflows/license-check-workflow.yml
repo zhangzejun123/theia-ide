@@ -12,8 +12,8 @@ on:
       - master
     paths:
       - 'yarn.lock'
-  schedule:
-    - cron: '0 4 * * *' # Runs every day at 4am: https://docs.github.com/en/actions/reference/events-that-trigger-workflows#scheduled-events-schedule
+  # schedule:
+  #   - cron: '0 4 * * *' # Runs every day at 4am: https://docs.github.com/en/actions/reference/events-that-trigger-workflows#scheduled-events-schedule
 
 jobs:
   License-check:

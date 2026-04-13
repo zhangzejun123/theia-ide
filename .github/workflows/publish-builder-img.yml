@@ -1,8 +1,8 @@
 name: Publish builder image
 
 on:
-  schedule:
-    - cron: "0 0 1 * *" # runs 1st day of every month
+  # schedule:
+  #   - cron: "0 0 1 * *" # runs 1st day of every month
   workflow_dispatch:
 
 jobs:

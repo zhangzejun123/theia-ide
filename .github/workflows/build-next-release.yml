@@ -2,8 +2,8 @@ name: Build Theia IDE Next Release (Linux)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 2 * * 1-5" # Runs every weekday at 2am UTC
+  # schedule:
+  #   - cron: "0 2 * * 1-5" # Runs every weekday at 2am UTC
 
 jobs:
   build:
