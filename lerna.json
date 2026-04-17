@@ -1,7 +1,5 @@
 {
-  "lerna": "4.0.0",
   "version": "1.70.200",
-  "useWorkspaces": true,
   "npmClient": "yarn",
   "command": {
     "run": {
