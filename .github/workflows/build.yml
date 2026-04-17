@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - 'feature-**'
     paths-ignore:
       - '**/*.md'
       - 'TheiaIDE logo/**'
@@ -14,8 +15,6 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'TheiaIDE logo/**'
-  schedule:
-    - cron: "0 4 * * *" # Runs every day at 4am: https://docs.github.com/en/actions/reference/events-that-trigger-workflows#scheduled-events-schedule
 
 jobs:
   build:
@@ -24,17 +23,50 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-22.04, macos-15, macos-15-intel] # macos-15-intel is for x64, macOS-15 is for arm64
-        node: ["24.x"]
+        include:
+          - os: windows-2022
+            node: "22.x"
+          - os: ubuntu-22.04
+            node: "22.x"
+            container: "ubuntu:20.04"
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     timeout-minutes: 60
+    permissions:
+      contents: write
 
     steps:
+      - name: Install base tools (Linux container)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TZ: UTC
+        run: |
+          apt-get update -y
+          apt-get install -y software-properties-common
+          add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          apt-get update -y
+          apt-get install -y curl git python3 python3-pip p7zip-full build-essential \
+            libsecret-1-dev libx11-dev libxkbfile-dev rpm fakeroot \
+            libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
+            gcc-11 g++-11
+          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
+          git config --global --add safe.directory '*'
+          # install gh CLI
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            | tee /etc/apt/sources.list.d/github-cli.list
+          apt-get update -y
+          apt-get install -y gh
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0 # To fetch all history for all branches and tags. (Will be required for caching with lerna: https://github.com/markuplint/markuplint/pull/111)
+          fetch-depth: 0
 
       - name: Use Node.js ${{ matrix.node }}
         uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
@@ -42,31 +74,52 @@ jobs:
           node-version: ${{ matrix.node }}
           registry-url: "https://registry.npmjs.org"
 
+      - name: Enable corepack (Linux container)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: corepack enable
+
       - name: Use Python 3.13
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
+
+      - name: Download @theia packages from theia fork
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          github_token: ${{ secrets.THEIA_REPO_TOKEN }}
+          repo: zhangzejun123/theia
+          workflow: ci-cd.yml
+          branch: ${{ github.ref_name }}
+          name: "@theia-${{ runner.os }}-node${{ matrix.node }}"
+          path: .theia-local-packages/
+          workflow_conclusion: ""
 
       - name: Install dependencies
         shell: bash
         run: yarn --skip-integrity-check --network-timeout 100000
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_python: ${{ runner.os == 'Linux' && '/usr/bin/python3' || '' }}
+          PYTHON: ${{ runner.os == 'Linux' && '/usr/bin/python3' || '' }}
+          NODE_GYP_FORCE_PYTHON: ${{ runner.os == 'Linux' && '/usr/bin/python3' || '' }}
+
+      - name: Override node_modules/@theia with local packages
+        shell: bash
+        run: node scripts/use-local-theia.js .theia-local-packages/
+
+      - name: Fix permissions for @theia binaries (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          find node_modules/@theia -name "*.js" -path "*/bin/*" -exec chmod +x {} \;
+          find node_modules/.bin -lname "../@theia/*" -exec chmod +x {} \;
 
       - name: Lint
         shell: bash
         run: yarn lint
 
-      - name: Build dev package (Windows, Linux)
-        if: (runner.os == 'Windows' || runner.os == 'Linux') && github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          yarn build:dev
-          yarn download:plugins
-          yarn package:applications:preview
-        env:
-          NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+
 
       - name: Build prod package (Windows, Linux)
         if: (runner.os == 'Windows' || runner.os == 'Linux') && github.event_name != 'pull_request'
@@ -76,76 +129,157 @@ jobs:
           yarn download:plugins
           yarn package:applications
         env:
-          NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+          NODE_OPTIONS: --max_old_space_size=12288
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_config_python: ${{ runner.os == 'Linux' && '/usr/bin/python3' || '' }}
+          PYTHON: ${{ runner.os == 'Linux' && '/usr/bin/python3' || '' }}
+          NODE_GYP_FORCE_PYTHON: ${{ runner.os == 'Linux' && '/usr/bin/python3' || '' }}
 
-      - name: Update electron-builder.yml for macos-15
-        if: matrix.os == 'macos-15'
-        run: |
-          sed -i '' 's|https://download.eclipse.org/theia/ide/latest/macos|https://download.eclipse.org/theia/ide/latest/macos-arm|g' applications/electron/electron-builder.yml
-
-      - name: Build prod package (Mac)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          yarn build
-          yarn download:plugins
-          yarn package:applications
-        env:
-          NODE_OPTIONS: --max_old_space_size=4096
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
-
-      - name: Upload Mac Dist Files
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: ${{ matrix.os == 'macos-15-intel' && 'mac-x64' || matrix.os == 'macos-15' && 'mac-arm64'}}
-          path: |
-            applications/electron/dist/**
-            !applications/electron/dist/mac/**
-            !applications/electron/dist/mac-arm64/**
-          retention-days: 1
-
-      - name: Upload Windows Dist Files
+      - name: Replace electron.exe icon (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: windows
-          path: |
-            applications/electron/dist/**
-          retention-days: 1
+        shell: bash
+        run: |
+          curl -L https://github.com/electron/rcedit/releases/latest/download/rcedit-x64.exe -o rcedit.exe
+          ./rcedit.exe "node_modules/electron/dist/electron.exe" --set-icon "resources/icons/AxioOne.ico"
 
-      - name: Upload Linux Dist Files
+      - name: Apply custom patches
+        shell: bash
+        run: npx patch-package --patch-dir ./custom-patchs
+
+      - name: Copy fontawesome-pro to node_modules
+        shell: bash
+        run: |
+          7z x resources/fontawesome-pro.7z -onode_modules/@fortawesome/fontawesome-pro
+
+      - name: Prepare build-cache directory
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+
+          # Windows 使用 build-cache-all，Linux 使用 build-cache-linux
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            READY_DIR="build-cache-all"
+          else
+            READY_DIR="build-cache-${OS_NAME}"
+          fi
+          mkdir -p "${READY_DIR}"
+
+          # yarn.lock（仅 Windows）
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            cp yarn.lock "${READY_DIR}/yarn.lock"
+          fi
+
+          # node_modules/@theia 不放入 build-cache 目录，单独上传
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            # Windows: node_modules 完整（含 @theia，不含单独处理的部分）
+            cp -r node_modules "${READY_DIR}/node_modules"
+          else
+            # Linux: 只拷贝指定的原生模块 + @theia/ffmpeg
+            LINUX_STAGING="${READY_DIR}/_linux_staging"
+            mkdir -p "${LINUX_STAGING}/@vscode"
+
+            cp -r node_modules/@parcel              "${LINUX_STAGING}/@parcel"
+            mkdir -p "${LINUX_STAGING}/@theia"
+            cp -r node_modules/@theia/ffmpeg         "${LINUX_STAGING}/@theia/ffmpeg"
+            cp -r node_modules/@vscode/ripgrep      "${LINUX_STAGING}/@vscode/ripgrep"
+            cp -r node_modules/drivelist            "${LINUX_STAGING}/drivelist"
+            cp -r node_modules/electron             "${LINUX_STAGING}/electron"
+            cp -r node_modules/node-pty             "${LINUX_STAGING}/node-pty"
+            cp -r node_modules/ssh2                 "${LINUX_STAGING}/ssh2"
+            cp -r node_modules/@nx                  "${LINUX_STAGING}/@nx"
+            cp -r node_modules/@msgpackr-extract    "${LINUX_STAGING}/@msgpackr-extract"
+
+            # 压缩为 linux.tar.gz，保留符号链接和权限
+            tar -czf "${READY_DIR}/linux.tar.gz" -C "${LINUX_STAGING}" .
+            rm -rf "${LINUX_STAGING}"
+          fi
+
+          # ~/.electron-gyp/{electron_version} -> electron-gyp/<os>/<version>.7z (Windows) or .tar.gz (Linux)
+          ELECTRON_VERSION=$(node -p "require('./applications/electron/package.json').devDependencies.electron")
+          ELECTRON_GYP_DIR="${HOME}/.electron-gyp/${ELECTRON_VERSION}"
+          if [ -d "${ELECTRON_GYP_DIR}" ]; then
+            mkdir -p "${READY_DIR}/electron-gyp/${OS_NAME}"
+            if [ "${{ runner.os }}" == "Windows" ]; then
+              7z a -t7z -mx=9 "${READY_DIR}/electron-gyp/${ELECTRON_VERSION}.7z" "${ELECTRON_GYP_DIR}/."
+            else
+              tar -czf "${READY_DIR}/electron-gyp/${OS_NAME}/${ELECTRON_VERSION}.tar.gz" -C "${ELECTRON_GYP_DIR}" .
+            fi
+          fi
+
+          # plugins（重命名为 <plugin>-<version>，仅 Windows）
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            node scripts/prepare-plugins.js "${READY_DIR}/plugins"
+          fi
+
+      - name: Upload build-cache-linux as artifact (Linux)
         if: runner.os == 'Linux' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: linux
-          path: |
-            applications/electron/dist/**
-          retention-days: 1
+        shell: bash
+        run: 7z a -t7z -mx=9 build-cache-linux.7z build-cache-linux/linux.tar.gz "build-cache-linux/electron-gyp/"
 
-      - name: Test (Linux)
-        if: runner.os == 'Linux'
+      - name: Publish Linux artifacts to release
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          xvfb-run -a yarn electron test
+          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          RELEASE_TAG="build-cache-${BRANCH_NAME}"
+          gh release create "${RELEASE_TAG}" \
+            --title "Build Cache: ${BRANCH_NAME}" \
+            --notes "Auto-generated build cache for branch \`${BRANCH_NAME}\`." \
+            --prerelease 2>/dev/null || true
+          gh release upload "${RELEASE_TAG}" \
+            "build-cache-linux.7z" \
+            --clobber
 
-      - name: Test (Windows)
-        if: runner.os == 'Windows'
+      - name: Download and merge Linux build-cache (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          RELEASE_TAG="build-cache-${BRANCH_NAME}"
+          # 等待 Linux 上传 release 完成（最多等 MAX_RETRIES * RETRY_INTERVAL 秒，每 30 秒重试一次）
+          MAX_RETRIES=100
+          RETRY_INTERVAL=30
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES: downloading from release ${RELEASE_TAG}..."
+            if gh release download "${RELEASE_TAG}" \
+                --pattern "build-cache-linux.7z" \
+                --dir . --clobber; then
+              echo "Download succeeded."
+              break
+            fi
+            if [ $i -eq $MAX_RETRIES ]; then
+              echo "Timed out waiting for Linux release assets."
+              exit 1
+            fi
+            echo "Not ready yet, retrying in ${RETRY_INTERVAL}s..."
+            sleep $RETRY_INTERVAL
+          done
+
+          # 从 build-cache-linux.7z 中提取 linux.tar.gz（含 @theia/ffmpeg）和 electron-gyp tar.gz，放入 build-cache-all/
+          ELECTRON_VERSION=$(node -p "require('./applications/electron/package.json').devDependencies.electron")
+          mkdir -p "build-cache-all/node_modules"
+          7z e build-cache-linux.7z "build-cache-linux/linux.tar.gz" -o"build-cache-all/node_modules/" -r
+          mkdir -p "build-cache-all/electron-gyp"
+          7z e build-cache-linux.7z "build-cache-linux/electron-gyp/linux/${ELECTRON_VERSION}.tar.gz" -o"build-cache-all/electron-gyp/" -r
+
+      - name: Compress artifacts (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
         run: |
-          yarn electron test
+          cp resources/migrate_node_modules.py build-cache-all/
+          7z a -t7z -mx=9 "build-cache-all.7z" "build-cache-all/"
 
-      - name: Test (macOS)
-        if: runner.os == 'macOS'
+      - name: Publish to release (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          yarn electron test
-
-      - name: Upload test screenshots
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: test-screenshots-${{ matrix.os }}
-          path: applications/electron/test-screenshots/
-          if-no-files-found: ignore
-          retention-days: 5
+          BRANCH_NAME=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          RELEASE_TAG="build-cache-${BRANCH_NAME}"
+          gh release upload "${RELEASE_TAG}" "build-cache-all.7z" --clobber
