@@ -1,5 +1,6 @@
 {
     "[markdown]": {
         "editor.defaultFormatter": "davidanson.vscode-markdownlint"
-    }
+    },
+    "kiroAgent.configureMCP": "Disabled"
 }

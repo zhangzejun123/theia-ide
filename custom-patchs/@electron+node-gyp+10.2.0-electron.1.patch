@@ -1,0 +1,105 @@
+diff --git a/node_modules/@electron/node-gyp/lib/find-python.js b/node_modules/@electron/node-gyp/lib/find-python.js
+index a71c00c..0c1a01b 100644
+--- a/node_modules/@electron/node-gyp/lib/find-python.js
++++ b/node_modules/@electron/node-gyp/lib/find-python.js
+@@ -10,6 +10,10 @@ function getOsUserInfo () {
+     return require('os').userInfo().username
+   } catch {}
+ }
++if (!win) {
++  delete process.env.PYTHONHOME
++  delete process.env.PYTHONPATH
++}
+ 
+ const systemDrive = process.env.SystemDrive || 'C:'
+ const username = process.env.USERNAME || process.env.USER || getOsUserInfo()
+@@ -49,7 +53,7 @@ class PythonFinder {
+   execFile = execFile
+   env = process.env
+   win = win
+-  pyLauncher = 'py.exe'
++  pyLauncher = 'python.exe'
+   winDefaultLocations = winDefaultLocationsArray
+ 
+   constructor (configPython) {
+@@ -260,7 +264,7 @@ class PythonFinder {
+ 
+     this.log.silly('execFile: exec = %j', exec)
+     this.log.silly('execFile: args = %j', args)
+-    this.log.silly('execFile: opts = %j', opts)
++    // this.log.silly('execFile: opts111 = %j', opts)
+     try {
+       const [err, stdout, stderr] = await this.execFile(exec, args, opts)
+       this.log.silly('execFile result: err = %j', (err && err.stack) || err)
+diff --git a/node_modules/@electron/node-gyp/lib/find-visualstudio.js b/node_modules/@electron/node-gyp/lib/find-visualstudio.js
+index 1b5ddf3..1e9871b 100644
+--- a/node_modules/@electron/node-gyp/lib/find-visualstudio.js
++++ b/node_modules/@electron/node-gyp/lib/find-visualstudio.js
+@@ -4,6 +4,7 @@ const log = require('./log')
+ const { existsSync } = require('./fs')
+ const { win32: path } = require('path')
+ const { regSearchKeys, execFile } = require('./util')
++const fs = require('fs')
+ 
+ class VisualStudioFinder {
+   static findVisualStudio = (...args) => new VisualStudioFinder(...args).findVisualStudio()
+@@ -198,25 +199,32 @@ class VisualStudioFinder {
+     ]
+ 
+     this.log.silly('Running', ps, psArgs)
+-    const [err, stdout, stderr] = await this.execFile(ps, psArgs)
+-    let parsedData = this.parseData(err, stdout, stderr)
+-    if (parsedData === null) {
+-      return null
+-    }
+-    this.log.silly('Parsed data', parsedData)
+-    if (!Array.isArray(parsedData)) {
+-      // if there are only 1 result, then Powershell will output non-array
+-      parsedData = [parsedData]
+-    }
+-    // normalize output
+-    parsedData = parsedData.map((info) => {
+-      info.path = info.InstallationPath
+-      info.version = `${info.InstallationVersion.Major}.${info.InstallationVersion.Minor}.${info.InstallationVersion.Build}.${info.InstallationVersion.Revision}`
+-      info.packages = info.Packages.map((p) => p.Id)
+-      return info
+-    })
++    // const [err, stdout, stderr] = await this.execFile(ps, psArgs)
++    // let parsedData = this.parseData(err, stdout, stderr)
++    // if (parsedData === null) {
++    //   return null
++    // }
++    const customVisualStudioInfo = process.env.CUSTOM_VISUAL_STUDIO_INFO;
++    let visualStudioInfo;
++    let parsedData;
++    if (customVisualStudioInfo != null) {
++      visualStudioInfo = JSON.parse(customVisualStudioInfo);
++      console.warn(visualStudioInfo);
++    }
++    this.log.silly('Parsed data', visualStudioInfo)
++    // if (!Array.isArray(visualStudioInfo)) {
++    //   // if there are only 1 result, then Powershell will output non-array
++    //   parsedData = [visualStudioInfo]
++    // }
++    // // normalize output
++    // parsedData = parsedData.map((info) => {
++    //   info.path = info.InstallationPath
++    //   info.version = `${info.InstallationVersion.Major}.${info.InstallationVersion.Minor}.${info.InstallationVersion.Build}.${info.InstallationVersion.Revision}`
++    //   info.packages = info.Packages.map((p) => p.Id)
++    //   return info
++    // })
+     // pass for further processing
+-    return this.processData(parsedData, supportedYears)
++    return visualStudioInfo
+   }
+ 
+   // Invoke the PowerShell script to get information about Visual Studio 2019
+@@ -393,7 +401,7 @@ class VisualStudioFinder {
+   }
+ 
+   msBuildPathExists (path) {
+-    return existsSync(path)
++    return fs.existsSync(path)
+   }
+ 
+   // Helper - process MSBuild information
