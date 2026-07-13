@@ -182,8 +182,8 @@ jobs:
 
             cp -r node_modules/@parcel              "${LINUX_STAGING}/@parcel"
             mkdir -p "${LINUX_STAGING}/@theia"
-            cp -r node_modules/@theia/ffmpeg         "${LINUX_STAGING}/@theia/ffmpeg"
-            cp -r node_modules/@vscode/ripgrep      "${LINUX_STAGING}/@vscode/ripgrep"
+            cp -r node_modules/@theia/ffmpeg        "${LINUX_STAGING}/@theia/ffmpeg"
+            cp -r node_modules/@vscode/*            "${LINUX_STAGING}/@vscode/"
             cp -r node_modules/drivelist            "${LINUX_STAGING}/drivelist"
             cp -r node_modules/electron             "${LINUX_STAGING}/electron"
             cp -r node_modules/node-pty             "${LINUX_STAGING}/node-pty"
