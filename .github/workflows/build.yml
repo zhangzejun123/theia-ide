@@ -30,9 +30,9 @@ jobs:
       matrix:
         include:
           - os: windows-2022
-            node: "22.x"
+            node: "24.x"
           - os: ubuntu-22.04
-            node: "22.x"
+            node: "24.x"
             container: "ubuntu:20.04"
 
     runs-on: ${{ matrix.os }}
@@ -184,11 +184,13 @@ jobs:
             # Linux: 只拷贝指定的原生模块 + @theia/ffmpeg
             LINUX_STAGING="${READY_DIR}/_linux_staging"
             mkdir -p "${LINUX_STAGING}/@vscode"
+            mkdir -p "${LINUX_STAGING}/@esbuild/linux-x64"
 
             cp -r node_modules/@parcel              "${LINUX_STAGING}/@parcel"
             mkdir -p "${LINUX_STAGING}/@theia"
             cp -r node_modules/@theia/ffmpeg        "${LINUX_STAGING}/@theia/ffmpeg"
             cp -r node_modules/@vscode/*            "${LINUX_STAGING}/@vscode/"
+            cp -r node_modules/@esbuild/linux-x64/* "${LINUX_STAGING}/@esbuild/linux-x64/"
             cp -r node_modules/drivelist            "${LINUX_STAGING}/drivelist"
             cp -r node_modules/electron             "${LINUX_STAGING}/electron"
             cp -r node_modules/node-pty             "${LINUX_STAGING}/node-pty"
