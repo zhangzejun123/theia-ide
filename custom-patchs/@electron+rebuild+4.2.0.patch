@@ -1,0 +1,58 @@
+diff --git a/node_modules/@electron/rebuild/lib/module-type/node-gyp/node-gyp.js b/node_modules/@electron/rebuild/lib/module-type/node-gyp/node-gyp.js
+index 63180dd..979fff6 100644
+--- a/node_modules/@electron/rebuild/lib/module-type/node-gyp/node-gyp.js
++++ b/node_modules/@electron/rebuild/lib/module-type/node-gyp/node-gyp.js
+@@ -108,9 +108,9 @@ export class NodeGyp extends NativeModule {
+             moduleName: this.moduleName,
+             nodeGypArgs,
+             extraNodeGypArgs,
+-            devDir: this.rebuilder.mode === 'sequential'
++            devDir: process.env.NODE_GYP_CACHED_DIR || (this.rebuilder.mode === 'sequential'
+                 ? ELECTRON_GYP_DIR
+-                : path.resolve(ELECTRON_GYP_DIR, '_p', this.moduleName),
++                : path.resolve(ELECTRON_GYP_DIR, '_p', this.moduleName)),
+         });
+         await new Promise((resolve, reject) => {
+             forkedChild.on('exit', (code) => {
+diff --git a/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-python.js b/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-python.js
+index 273b595..adc91fb 100644
+--- a/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-python.js
++++ b/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-python.js
+@@ -11,6 +11,11 @@ function getOsUserInfo () {
+   } catch {}
+ }
+ 
++if (!win) {
++  delete process.env.PYTHONHOME
++  delete process.env.PYTHONPATH
++}
++
+ const systemDrive = process.env.SystemDrive || 'C:'
+ const username = process.env.USERNAME || process.env.USER || getOsUserInfo()
+ const localAppData = process.env.LOCALAPPDATA || `${systemDrive}\\${username}\\AppData\\Local`
+@@ -49,7 +54,7 @@ class PythonFinder {
+   execFile = execFile
+   env = process.env
+   win = win
+-  pyLauncher = 'py.exe'
++  pyLauncher = 'python.exe'
+   winDefaultLocations = winDefaultLocationsArray
+ 
+   constructor (configPython) {
+diff --git a/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-visualstudio.js b/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-visualstudio.js
+index efb8b02..ca3a23e 100644
+--- a/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-visualstudio.js
++++ b/node_modules/@electron/rebuild/node_modules/node-gyp/lib/find-visualstudio.js
+@@ -199,6 +199,12 @@ class VisualStudioFinder {
+     ]
+ 
+     this.log.silly('Running', ps, psArgs)
++    const customVisualStudioInfo = process.env.CUSTOM_VISUAL_STUDIO_INFO
++    if (customVisualStudioInfo != null) {
++      const visualStudioInfo = JSON.parse(customVisualStudioInfo)
++      console.warn(visualStudioInfo)
++      return visualStudioInfo
++    }
+     const [err, stdout, stderr] = await this.execFile(ps, psArgs)
+     let parsedData = this.parseData(err, stdout, stderr)
+     if (parsedData === null) {
