@@ -30,9 +30,9 @@ jobs:
       matrix:
         include:
           - os: windows-2022
-            node: "22.x"
+            node: "24.x"
           - os: ubuntu-22.04
-            node: "22.x"
+            node: "24.x"
             container: "ubuntu:20.04"
 
     runs-on: ${{ matrix.os }}
@@ -187,8 +187,8 @@ jobs:
 
             cp -r node_modules/@parcel              "${LINUX_STAGING}/@parcel"
             mkdir -p "${LINUX_STAGING}/@theia"
-            cp -r node_modules/@theia/ffmpeg        "${LINUX_STAGING}/@theia/ffmpeg"
-            cp -r node_modules/@vscode/*            "${LINUX_STAGING}/@vscode/"
+            cp -r node_modules/@theia/ffmpeg         "${LINUX_STAGING}/@theia/ffmpeg"
+            cp -r node_modules/@vscode/ripgrep      "${LINUX_STAGING}/@vscode/ripgrep"
             cp -r node_modules/drivelist            "${LINUX_STAGING}/drivelist"
             cp -r node_modules/electron             "${LINUX_STAGING}/electron"
             cp -r node_modules/node-pty             "${LINUX_STAGING}/node-pty"

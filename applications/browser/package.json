@@ -121,7 +121,6 @@
     "react-dom": "^19.2.8",
     "theia-ide-product-ext": "1.76.0",
     "@theia/plugin-metrics": "1.76.0",
-    "@theia/scm-extra": "1.76.0",
     "@fortawesome/fontawesome-free": "6.5.2",
     "@reduxjs/toolkit": "^1.8.5",
     "@types/jest": "^27.0.3",
