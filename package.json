@@ -16,6 +16,8 @@
     "node": ">=24"
   },
   "devDependencies": {
+    "@babel/core": "^7.0.0",
+    "@babel/preset-env": "^7.29.7",
     "@eclipse-dash/nodejs-wrapper": "^0.0.1",
     "@theia/cli": "1.76.0",
     "@types/yargs": "^17",
